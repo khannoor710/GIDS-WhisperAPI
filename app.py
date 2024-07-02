@@ -2,8 +2,10 @@ from flask import Flask, request, jsonify
 import torch
 import whisper
 import os
-
+from flask_cors import CORS, cross_origin
 app = Flask(__name__)
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
 
 # Function to load Whisper model
 def load_whisper_model(model_name="base"):
@@ -12,6 +14,7 @@ def load_whisper_model(model_name="base"):
 # Load the default Whisper model and track the model name
 current_model_name = "base"
 model = load_whisper_model(current_model_name)
+options = whisper.DecodingOptions(language="en")
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
