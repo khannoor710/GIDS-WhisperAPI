@@ -7,9 +7,13 @@ app = Flask(__name__)
 cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
-# Function to load Whisper model
+
+# Function to load Whisper model with GPU support if available
 def load_whisper_model(model_name="base"):
-    return whisper.load_model(model_name)
+    model = whisper.load_model(model_name)
+    if torch.cuda.is_available():
+        model = model.to("cuda")  # Move model to GPU
+    return model
 
 # Load the default Whisper model and track the model name
 current_model_name = "base"
