@@ -2,6 +2,13 @@ To run python code in VS code please follow the steps in the link below
 
 https://code.visualstudio.com/docs/python/python-tutorial#_create-a-virtual-environment
 
+Install below dependencies 
+
+pip3 install flask flask_cors torch openai-whisper
+pip3 install 'Numpy<2'
+
+
+
 After running the file locally below endpoints will be accessible. Copy paste the url below in postman to populate the endpoint details.
 
     1) curl http://127.0.0.1:8080/test
