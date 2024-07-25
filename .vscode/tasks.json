@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Run First API",
+        "type": "shell",
+        "command": "python",
+        "args": ["/Users/dt226003/Whisper/GIDS-WhisperAPI/app.py"],
+        "problemMatcher": [],
+        "group": "build",
+        "isBackground": true
+      },
+      {
+        "label": "Run Second API",
+        "type": "shell",
+        "command": "python",
+        "args": ["/Users/dt226003/Whisper/GIDS-WhisperAPI/live_audio_to_text.py"],
+        "problemMatcher": [],
+        "group": "build",
+        "isBackground": true
+      }
+    ]
+  }  
