@@ -2,7 +2,9 @@ from flask import Flask, request, jsonify,send_file
 import torch
 import whisper
 import pyminizip
-import io
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from docx import Document
 import re
 from word2number import w2n
 import os
@@ -34,6 +36,19 @@ def load_whisper_model(model_name="base"):
         model = model.to("cuda")  # Move model to GPU
     return model
 
+# Function to generate pdf
+def create_pdf(transcribed_text, pdf_file_path):
+    c = canvas.Canvas(pdf_file_path, pagesize=letter)
+    width, height = letter
+    c.drawString(100, height - 100, transcribed_text)
+    c.save()
+
+# Function to generate word doc
+def create_word(transcribed_text, word_file_path):
+    doc = Document()
+    doc.add_paragraph(transcribed_text)
+    doc.save(word_file_path)
+
 # Load the default Whisper model and track the model name
 current_model_name = "base"
 model = load_whisper_model(current_model_name)
@@ -58,15 +73,34 @@ def create_transcription():
 def create_protectedfile():
     data = request.json     
     transcribedText = data.get('transcribedText')
+    file_type = data.get('fileType')  # Expecting 'text' or 'pdf'
     print(transcribedText)
-    # Save the masked transcript to a text file
-    text_file_path = './transcribed_text.txt'
-    with open(text_file_path, 'w') as file:
-        file.write(transcribedText)
+    print(file_type)
+
+    if file_type == 'pdf':
+        # Save the masked transcript to a PDF file
+        pdf_file_path = './transcribed_text.pdf'
+        create_pdf(transcribedText, pdf_file_path)
+        file_to_zip = pdf_file_path
+    elif file_type == 'doc':
+        # Save the masked transcript to a Word file
+        word_file_path = './transcribed_text.docx'
+        create_word(transcribedText, word_file_path)
+        file_to_zip = word_file_path
+    else:
+        # Save the masked transcript to a text file
+        text_file_path = './transcribed_text.txt'
+        with open(text_file_path, 'w') as file:
+            file.write(transcribedText)
+        file_to_zip = text_file_path
 
     # Create a password-protected ZIP file
     zip_file_path = './protected_transcript.zip'
-    pyminizip.compress(text_file_path, None, zip_file_path, 'admin@123#', 5)
+    pyminizip.compress(file_to_zip, None, zip_file_path, 'admin@123#', 5)
+
+    # Clean up the temporary files
+    if os.path.exists(file_to_zip):
+        os.remove(file_to_zip)
 
    # Send the ZIP file to the client
     return send_file(zip_file_path, as_attachment=True, download_name='protected_transcript.zip')
