@@ -1,19 +1,21 @@
-from flask import Flask, request, jsonify,send_file
+from flask import Flask, request, jsonify, send_file
 import torch
 import whisper
 import pyminizip
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph
 from docx import Document
 import re
 from word2number import w2n
 import os
-from flask_cors import CORS, cross_origin
+from flask_cors import CORS
+
 app = Flask(__name__)
 cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
-# Function to mask and remove spaces and - 
+# Function to mask and remove spaces and -
 def mask_number_in_text(text):
     def mask_number(match):
         number_str = match.group()
@@ -38,10 +40,23 @@ def load_whisper_model(model_name="base"):
 
 # Function to generate pdf
 def create_pdf(transcribed_text, pdf_file_path):
-    c = canvas.Canvas(pdf_file_path, pagesize=letter)
-    width, height = letter
-    c.drawString(100, height - 100, transcribed_text)
-    c.save()
+    # Create a SimpleDocTemplate
+    doc = SimpleDocTemplate(pdf_file_path, pagesize=letter)
+    # Create a list to hold the flowable elements
+    flowables = []
+
+    # Use styles for the text
+    styles = getSampleStyleSheet()
+    style = styles['BodyText']
+
+    # Create a paragraph with the transcribed text
+    para = Paragraph(transcribed_text, style)
+    
+    # Add the paragraph to the flowables
+    flowables.append(para)
+    
+    # Build the PDF
+    doc.build(flowables)
 
 # Function to generate word doc
 def create_word(transcribed_text, word_file_path):
@@ -62,7 +77,7 @@ def create_transcription():
     audio_file = request.files['audio']
     file_path = f"./{audio_file.filename}"
     audio_file.save(file_path)
-    result = model.transcribe(file_path, language="en", task="translate",fp16=False)
+    result = model.transcribe(file_path, language="en", task="translate", fp16=False)
     transcribed_text = result.get('text', '')
     masked_transcript = mask_number_in_text(transcribed_text)
     os.remove(file_path)
@@ -73,7 +88,7 @@ def create_transcription():
 def create_protectedfile():
     data = request.json     
     transcribedText = data.get('transcribedText')
-    file_type = data.get('fileType')  # Expecting 'text' or 'pdf'
+    file_type = data.get('fileType')  # Expecting 'text', 'doc', or 'pdf'
     print(transcribedText)
     print(file_type)
 
@@ -102,7 +117,7 @@ def create_protectedfile():
     if os.path.exists(file_to_zip):
         os.remove(file_to_zip)
 
-   # Send the ZIP file to the client
+    # Send the ZIP file to the client
     return send_file(zip_file_path, as_attachment=True, download_name='protected_transcript.zip')
 
 @app.route('/api/model', methods=['POST'])
