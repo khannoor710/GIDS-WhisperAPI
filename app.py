@@ -87,21 +87,53 @@ def transcribe_live():
 def create_protectedfile():
     data = request.json     
     transcribedText = data.get('transcribedText')
-    file_type = data.get('fileType')
+    file_type = data.get('fileType')  # Expecting 'text', 'doc', or 'pdf'
+    print(transcribedText)
+    print(file_type)
 
     if file_type == 'pdf':
+        # Save the masked transcript to a PDF file
         pdf_file_path = './transcribed_text.pdf'
         create_pdf(transcribedText, pdf_file_path)
         file_to_zip = pdf_file_path
     elif file_type == 'doc':
+        # Save the masked transcript to a Word file
         word_file_path = './transcribed_text.docx'
         create_word(transcribedText, word_file_path)
         file_to_zip = word_file_path
+    else:
+        # Save the masked transcript to a text file
+        text_file_path = './transcribed_text.txt'
+        with open(text_file_path, 'w') as file:
+            file.write(transcribedText)
+        file_to_zip = text_file_path
 
-    protected_zip_path = f'protected_{file_type}.zip'
-    pyminizip.compress(file_to_zip, None, protected_zip_path, "yourpassword", 5)
-    
-    return send_file(protected_zip_path, as_attachment=True)
+    # Create a password-protected ZIP file
+    zip_file_path = './protected_transcript.zip'
+    pyminizip.compress(file_to_zip, None, zip_file_path, 'admin@123#', 5)
+
+    # Clean up the temporary files
+    if os.path.exists(file_to_zip):
+        os.remove(file_to_zip)
+
+    # Send the ZIP file to the client
+    return send_file(zip_file_path, as_attachment=True, download_name='protected_transcript.zip')
+
+@app.route('/api/model', methods=['POST'])
+def update_model():
+    global model, current_model_name
+    model_name = request.json.get('model_name', 'base')
+    model = load_whisper_model(model_name)
+    current_model_name = model_name
+    return jsonify({'message': f'Model switched to {model_name}'}), 200
+
+@app.route('/api/model', methods=['GET'])
+def get_current_model():
+    return jsonify({'current_model': current_model_name})
+
+@app.route('/api/test', methods=['GET'])
+def test():
+    return jsonify({'message': 'API is working!'})
 
 if __name__ == '__main__':
-    app.run(port=8080)
+    app.run(debug=True,port=8080)
