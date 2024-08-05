@@ -7,7 +7,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from docx import Document
 import re
-from word2number import w2n
 import os
 from flask_cors import CORS
 
@@ -51,20 +50,29 @@ current_model_name = "base"
 model = load_whisper_model(current_model_name)
 options = whisper.DecodingOptions(language="en")
 
-@app.route('/api/transcription', methods=['POST'])
-def create_transcription():
+@app.route('/api/transcriptions', methods=['POST'])
+def create_transcriptions():
     if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file provided'}), 400
+        return jsonify({'error': 'No audio files provided'}), 400
 
-    audio_file = request.files['audio']
-    file_path = f"./{audio_file.filename}"
-    audio_file.save(file_path)
-    result = model.transcribe(file_path, language="en", task="translate", fp16=False)
-    transcribed_text = result.get('text', '')
-    masked_transcript = mask_number_in_text(transcribed_text)
-    os.remove(file_path)
+    audio_files = request.files.getlist('audio')
+    transcriptions = []
 
-    return jsonify({'transcribed_text': masked_transcript})
+    for audio_file in audio_files:
+        file_path = f"./{audio_file.filename}"
+        audio_file.save(file_path)
+        try:
+            result = model.transcribe(file_path, language="en", task="translate", fp16=False)
+            transcribed_text = result.get('text', '')
+            masked_transcript = mask_number_in_text(transcribed_text)
+            transcriptions.append({
+                'file_name': audio_file.filename,
+                'transcribed_text': masked_transcript
+            })
+        finally:
+            os.remove(file_path)
+
+    return jsonify({'transcriptions': transcriptions})
 
 @app.route('/api/transcribe-live', methods=['POST'])
 def transcribe_live():
@@ -136,4 +144,4 @@ def test():
     return jsonify({'message': 'API is working!'})
 
 if __name__ == '__main__':
-    app.run(debug=True,port=8080)
+    app.run(debug=True, port=8080)
