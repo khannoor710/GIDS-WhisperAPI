@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, send_file
-import torch
 import whisper
 import pyminizip
 from reportlab.lib.pagesizes import letter
@@ -9,6 +8,13 @@ from docx import Document
 import re
 import os
 from flask_cors import CORS
+import numpy as np
+import librosa
+from sklearn.cluster import KMeans
+from pydub import AudioSegment
+from pydub.silence import split_on_silence
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 
 app = Flask(__name__)
 cors = CORS(app)
@@ -23,13 +29,10 @@ def mask_number_in_text(text):
         return number_str[:2] + '*' * (len(number_str) - 4) + number_str[-2:]
     
     masked_text = re.sub(r'\b\d[\d ,\-]*\d\b', mask_number, text)
-    
     return masked_text
 
 def load_whisper_model(model_name="base"):
     model = whisper.load_model(model_name)
-    if torch.cuda.is_available():
-        model = model.to("cuda")
     return model
 
 def create_pdf(transcribed_text, pdf_file_path):
@@ -46,9 +49,61 @@ def create_word(transcribed_text, word_file_path):
     doc.add_paragraph(transcribed_text)
     doc.save(word_file_path)
 
+def split_audio_on_silence(audio_path):
+    audio = AudioSegment.from_file(audio_path)
+    chunks = split_on_silence(audio, min_silence_len=500, silence_thresh=-40, keep_silence=250)
+    return chunks
+
+def extract_features(audio_chunk):
+    y = np.array(audio_chunk.get_array_of_samples(), dtype=np.float32)
+    sr = audio_chunk.frame_rate
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+    mfcc_mean = np.mean(mfcc.T, axis=0)
+    return mfcc_mean
+
+def cluster_speakers(features, n_speakers=2):
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+    
+    pca = PCA(n_components=5)
+    features_pca = pca.fit_transform(features_scaled)
+    
+    kmeans = KMeans(n_clusters=n_speakers, random_state=0)
+    labels = kmeans.fit_predict(features_pca)
+    return labels
+
+def transcribe_segment(segment, model):
+    segment.export("temp.wav", format="wav")
+    result = model.transcribe("temp.wav", language="en", task="translate", fp16=False)
+    transcribed_text = result.get('text', '')
+    os.remove("temp.wav")
+    return transcribed_text
+
+def transcribe_and_label(audio_file, model):
+    # Split audio into chunks
+    audio_chunks = split_audio_on_silence(audio_file)
+    
+    # Extract features
+    features = np.array([extract_features(chunk) for chunk in audio_chunks])
+    
+    # Cluster speakers
+    try:
+        speaker_labels = cluster_speakers(features)
+    except Exception as e:
+        print(f"Error in clustering speakers: {e}")
+        speaker_labels = [0] * len(audio_chunks)  # Default to single speaker
+    
+    labeled_transcription = []
+    for i, chunk in enumerate(audio_chunks):
+        transcription = transcribe_segment(chunk, model)
+        masked_chunk = mask_number_in_text(transcription)
+        speaker = "Caller" if speaker_labels[i] == 0 else "Callee"
+        labeled_transcription.append(f"{speaker}: {masked_chunk}")
+
+    return "\n".join(labeled_transcription)
+
 current_model_name = "base"
 model = load_whisper_model(current_model_name)
-options = whisper.DecodingOptions(language="en")
 
 @app.route('/api/transcriptions', methods=['POST'])
 def create_transcriptions():
@@ -62,12 +117,11 @@ def create_transcriptions():
         file_path = f"./{audio_file.filename}"
         audio_file.save(file_path)
         try:
-            result = model.transcribe(file_path, language="en", task="translate", fp16=False)
-            transcribed_text = result.get('text', '')
-            masked_transcript = mask_number_in_text(transcribed_text)
+            # Transcribe and label speakers
+            labeled_transcription = transcribe_and_label(file_path, model)
             transcriptions.append({
                 'file_name': audio_file.filename,
-                'transcribed_text': masked_transcript
+                'transcribed_text': labeled_transcription
             })
         finally:
             os.remove(file_path)
@@ -76,28 +130,25 @@ def create_transcriptions():
 
 @app.route('/api/transcribe-live', methods=['POST'])
 def transcribe_live():
-    print('inside live transcribe')
     if 'audio' not in request.files:
         return jsonify({'error': 'No audio file provided'}), 400
 
     audio_file = request.files['audio']
     file_path = f"./{audio_file.filename}"
     audio_file.save(file_path)
-    result = model.transcribe(file_path, language="en", task="translate", fp16=False)
-    transcribed_text = result.get('text', '')
-    print(transcribed_text)
-    masked_transcript = mask_number_in_text(transcribed_text)
+
+    # Transcribe and label speakers
+    labeled_transcription = transcribe_and_label(file_path, model)
+
     os.remove(file_path)
 
-    return jsonify({'transcribed_text': masked_transcript})
+    return jsonify({'transcribed_text': labeled_transcription})
 
 @app.route('/api/download', methods=['POST'])
 def create_protectedfile():
     data = request.json     
     transcribedText = data.get('transcribedText')
     file_type = data.get('fileType')  # Expecting 'text', 'doc', or 'pdf'
-    print(transcribedText)
-    print(file_type)
 
     if file_type == 'pdf':
         # Save the masked transcript to a PDF file
