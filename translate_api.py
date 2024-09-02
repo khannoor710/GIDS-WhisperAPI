@@ -15,16 +15,18 @@ model_name = 'Helsinki-NLP/opus-mt-fr-en'
 tokenizer = MarianTokenizer.from_pretrained(model_name)
 model = MarianMTModel.from_pretrained(model_name)
 
-def translate_batch_texts(texts):
-    """Batch translate French texts to English using MarianMT model."""
-    batch = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
+def translate_text(text):
+    """Translate French text to English using MarianMT model."""
+    batch = tokenizer([text], return_tensors="pt", padding=True, truncation=True, max_length=512)
     translated = model.generate(**batch)
-    return [tokenizer.decode(t, skip_special_tokens=True) for t in translated]
+    return tokenizer.decode(translated[0], skip_special_tokens=True)
 
 def translate_pdf_page(page_content):
-    """Translate a single page of text from French to English."""
-    translated_texts = translate_batch_texts(page_content['texts'])
-    return {'page_num': page_content['page_num'], 'translated_texts': translated_texts, 'metadata': page_content['metadata']}
+    """Translate an entire page of text from French to English."""
+    # Join all text into a single string for the whole page
+    text_to_translate = '\n'.join(page_content['texts'])
+    translated_text = translate_text(text_to_translate)
+    return {'page_num': page_content['page_num'], 'translated_text': translated_text, 'metadata': page_content['metadata']}
 
 def extract_text_from_pdf(pdf_path):
     """Extract texts and metadata from PDF."""
@@ -37,29 +39,47 @@ def extract_text_from_pdf(pdf_path):
         metadata = []
         for block in blocks:
             if block["type"] == 0:  # Text block
+                block_text = ""
+                block_meta = []
                 for line in block["lines"]:
                     for span in line["spans"]:
-                        if span["text"].strip():
-                            page_texts.append(span["text"])
-                            metadata.append({'bbox': span['bbox'], 'size': span['size'], 'color': span.get('color', (0, 0, 0))})
+                        text = span["text"].strip()
+                        if text:
+                            block_text += " " + text
+                            block_meta.append({'bbox': span['bbox'], 'size': span['size'], 'color': span.get('color', (0, 0, 0))})
+                if block_text.strip():
+                    page_texts.append(block_text.strip())
+                    metadata.append(block_meta)
         all_texts.append({'page_num': page_num, 'texts': page_texts, 'metadata': metadata})
     return all_texts
 
-def create_translated_pdf(output_pdf_path, translated_pages):
-    """Create a translated PDF using fpdf."""
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+def replace_text_in_pdf(doc, text_replacements):
+    """Replace French text with English translations in the PDF."""
+    for page_content in text_replacements:
+        page = doc[page_content['page_num']]
+        translated_text = page_content['translated_text']
 
-    for page in translated_pages:
-        pdf.add_page()
-        for metadata, translated_text in zip(page['metadata'], page['translated_texts']):
-            pdf.set_font("Arial", size=int(metadata['size']))
-            color = int(sum(metadata['color']) / len(metadata['color']) * 255) if metadata['color'] else 0
-            pdf.set_text_color(color, color, color)
-            pdf.set_xy(metadata['bbox'][0], metadata['bbox'][1])
-            pdf.cell(0, 10, translated_text)
+        # Clear existing content on the page
+        page.clean_contents()
 
-    pdf.output(output_pdf_path)
+        # Define text insertion box with padding to prevent overlap
+        text_box = fitz.Rect(50, 50, page.rect.width - 50, page.rect.height - 50)  # Leave margins
+        font_size = 10  # Smaller font size to fit more text
+        font_name = "helv"  # Use Helvetica for simplicity
+
+        # Insert translated text in a wrapped text box
+        page.insert_textbox(text_box, translated_text, fontsize=font_size, fontname=font_name, color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
+
+def create_translated_pdf(input_pdf_path, output_pdf_path, translated_pages):
+    """Create a translated PDF with replaced text."""
+    doc = fitz.open(input_pdf_path)
+
+    # Replace text in the PDF
+    replace_text_in_pdf(doc, translated_pages)
+
+    # Save the modified PDF
+    doc.save(output_pdf_path)
+    doc.close()
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -86,7 +106,7 @@ def upload_file():
                 translated_pages = pool.map(translate_pdf_page, extracted_data)
 
             # Create the translated PDF
-            create_translated_pdf(output_pdf_path, translated_pages)
+            create_translated_pdf(input_pdf_path, output_pdf_path, translated_pages)
 
             # Clean up input file
             os.remove(input_pdf_path)
