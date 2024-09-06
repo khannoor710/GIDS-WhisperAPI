@@ -1,11 +1,9 @@
 from flask import Flask, request, send_file, jsonify
-from pdf2docx import Converter
-from docx import Document
-from transformers import MarianMTModel, MarianTokenizer
-import torch
 import os
 import logging
-from docx2pdf import convert
+import fitz  # PyMuPDF for PDF manipulation
+from transformers import MarianMTModel, MarianTokenizer
+import torch
 
 app = Flask(__name__)
 
@@ -17,47 +15,71 @@ model_name = 'Helsinki-NLP/opus-mt-fr-en'
 tokenizer = MarianTokenizer.from_pretrained(model_name)
 model = MarianMTModel.from_pretrained(model_name)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
 
 def translate_text(text):
     """Translate French text to English using MarianMT model."""
-    batch = tokenizer([text], return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
-    translated = model.generate(**batch)
-    return tokenizer.decode(translated[0], skip_special_tokens=True)
+    sentences = text.split('. ')
+    translated_sentences = []
+    for sentence in sentences:
+        batch = tokenizer([sentence], return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        translated = model.generate(**batch)
+        translated_text = tokenizer.decode(translated[0], skip_special_tokens=True)
+        translated_sentences.append(translated_text)
+    return '. '.join(translated_sentences)
 
-def convert_pdf_to_word(pdf_path, word_path):
-    """Convert PDF file to Word format."""
-    cv = Converter(pdf_path)
-    cv.convert(word_path, start=0, end=None)
-    cv.close()
-
-def translate_docx(docx_path):
-    """Translate all text in a Word document from French to English."""
-    doc = Document(docx_path)
+def translate_pdf(input_pdf_path, output_pdf_path):
+    """Translate all text in the PDF from French to English while preserving layout and ensuring text alignment."""
+    doc = fitz.open(input_pdf_path)
     
-    for paragraph in doc.paragraphs:
-        if paragraph.text.strip():
-            translated_text = translate_text(paragraph.text)
-            paragraph.text = translated_text
+    # Path to font file
+    font_path = "/Users/dt226003/Whisper/GIDS-WhisperAPI/fonts/Arial/Arial-Regular.ttf"
+    if not os.path.exists(font_path):
+        raise FileNotFoundError(f"Font file not found: {font_path}")
+    
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        blocks = page.get_text("dict")["blocks"]
 
-    # Translate text in tables
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if cell.text.strip():
-                    translated_text = translate_text(cell.text)
-                    cell.text = translated_text
+        for block in blocks:
+            if "lines" in block:
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        original_text = span["text"].strip()
 
-    doc.save(docx_path)
+                        # Skip digits and non-text elements, focus only on text to be translated
+                        if original_text and not original_text.isdigit():
+                            # Translate the text from French to English
+                            translated_text = translate_text(original_text)
 
-def convert_word_to_pdf(docx_path, pdf_path):
-    """Convert Word document to PDF format."""
-    convert(docx_path, pdf_path)
+                            # Define the bounding box for the text
+                            bbox = span["bbox"]
+
+                            # Draw a white rectangle over the French text to "erase" it
+                            page.draw_rect(
+                                fitz.Rect(bbox),
+                                color=(1, 1, 1),  # White color to match background
+                                fill=True
+                            )
+
+                            # Insert the translated English text in the same location
+                            page.insert_text(
+                                (bbox[0], bbox[1]),  # Coordinates for the original French text
+                                translated_text,      # The translated English text
+                                fontsize=span["size"],  # Keep the original font size
+                                fontname="helv",  # Use Helvetica (or change if you need a different font)
+                                fontfile=font_path,  # Path to the custom font
+                                color=(0, 0, 0),  # Black color for the text
+                                overlay=True  # Overlay so that we don't affect non-text elements
+                            )
+
+    # Save the translated PDF with the layout intact
+    doc.save(output_pdf_path)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle file upload, translation, and conversion back to PDF."""
+    """Handle file upload, translation, and PDF conversion."""
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
 
@@ -67,24 +89,13 @@ def upload_file():
 
     if file and file.filename.lower().endswith('.pdf'):
         input_pdf_path = os.path.join(os.getcwd(), 'input.pdf')
-        intermediate_docx_path = os.path.join(os.getcwd(), 'intermediate.docx')
         output_pdf_path = os.path.join(os.getcwd(), 'translated_english_pdf.pdf')
 
         try:
             file.save(input_pdf_path)
 
-            # Step 1: Convert PDF to Word
-            convert_pdf_to_word(input_pdf_path, intermediate_docx_path)
-
-            # Step 2: Translate text in Word document
-            translate_docx(intermediate_docx_path)
-
-            # Step 3: Convert translated Word document back to PDF
-            convert_word_to_pdf(intermediate_docx_path, output_pdf_path)
-
-            # Clean up intermediate files
-            os.remove(input_pdf_path)
-            os.remove(intermediate_docx_path)
+            # Step 1: Translate the PDF
+            translate_pdf(input_pdf_path, output_pdf_path)
 
             if os.path.exists(output_pdf_path):
                 response = send_file(output_pdf_path, as_attachment=True)
