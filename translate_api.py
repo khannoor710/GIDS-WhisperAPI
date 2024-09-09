@@ -4,8 +4,11 @@ import logging
 import fitz  # PyMuPDF for PDF manipulation
 from transformers import MarianMTModel, MarianTokenizer
 import torch
+from flask_cors import CORS
 
 app = Flask(__name__)
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
